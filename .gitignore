@@ -12,6 +12,11 @@ dist
 dist-ssr
 *.local
 
+# Environment files (contain secrets, e.g. MONGODB_URI)
+.env
+.env.*
+!.env.example
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -8,6 +8,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Calendar } from '@/components/ui/calendar';
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart';
 import { useToast } from '@/hooks/use-toast';
+import LoadingSpinner from '@/components/LoadingSpinner';
 import { cn } from '@/lib/utils';
 import {
   AlertOctagon,
@@ -22,10 +23,10 @@ import {
   Layers,
   ListChecks,
   PlayCircle,
+  ShieldCheck,
   TestTube2,
   TrendingUp,
   Users,
-  XCircle,
 } from 'lucide-react';
 import {
   Area,
@@ -72,107 +73,20 @@ interface MockCustomer {
   trendPassed: number[];
 }
 
-const MOCK_CUSTOMERS: MockCustomer[] = [
-  {
-    id: 'abc',
-    name: 'ABC Technologies',
-    industry: 'Enterprise Software',
-    projects: [
-      {
-        name: 'E-Commerce Platform',
-        users: 25,
-        testCases: 1200,
-        manual: 180,
-        automated: 1020,
-        executions: 2000,
-        passed: 1840,
-        openDefects: 15,
-        criticalDefects: 1,
-      },
-      {
-        name: 'Banking Application',
-        users: 40,
-        testCases: 1800,
-        manual: 504,
-        automated: 1296,
-        executions: 3100,
-        passed: 2728,
-        openDefects: 30,
-        criticalDefects: 3,
-      },
-      {
-        name: 'Mobile Application',
-        users: 20,
-        testCases: 900,
-        manual: 450,
-        automated: 450,
-        executions: 1200,
-        passed: 912,
-        openDefects: 35,
-        criticalDefects: 3,
-      },
-      {
-        name: 'Internal Portal',
-        users: 40,
-        testCases: 1520,
-        manual: 366,
-        automated: 1154,
-        executions: 1930,
-        passed: 1665,
-        openDefects: 15,
-        criticalDefects: 1,
-      },
-    ],
-    defectStatus: { open: 95, fixed: 180, closed: 65 },
-    severity: { critical: 8, high: 32, medium: 120, low: 180 },
-    trendTotal: [1200, 1800, 2300, 2930],
-    trendPassed: [1042, 1563, 1997, 2543],
-  },
-  {
-    id: 'xyz',
-    name: 'XYZ Solutions',
-    industry: 'Fintech & Analytics',
-    projects: [
-      {
-        name: 'Retail Payments Platform',
-        users: 60,
-        testCases: 2400,
-        manual: 960,
-        automated: 1440,
-        executions: 4100,
-        passed: 3608,
-        openDefects: 22,
-        criticalDefects: 3,
-      },
-      {
-        name: 'CRM System',
-        users: 25,
-        testCases: 900,
-        manual: 540,
-        automated: 360,
-        executions: 1500,
-        passed: 1245,
-        openDefects: 18,
-        criticalDefects: 1,
-      },
-      {
-        name: 'Analytics Suite',
-        users: 15,
-        testCases: 700,
-        manual: 210,
-        automated: 490,
-        executions: 1100,
-        passed: 913,
-        openDefects: 12,
-        criticalDefects: 1,
-      },
-    ],
-    defectStatus: { open: 52, fixed: 98, closed: 40 },
-    severity: { critical: 5, high: 18, medium: 70, low: 97 },
-    trendTotal: [900, 1500, 2000, 2300],
-    trendPassed: [775, 1291, 1722, 1978],
-  },
-];
+type CustomerOption = Pick<MockCustomer, 'id' | 'name'>;
+
+const EMPTY_CUSTOMER: MockCustomer = {
+  id: '',
+  name: '',
+  industry: '',
+  projects: [],
+  defectStatus: { open: 0, fixed: 0, closed: 0 },
+  severity: { critical: 0, high: 0, medium: 0, low: 0 },
+  trendTotal: [0, 0, 0, 0],
+  trendPassed: [0, 0, 0, 0],
+};
+
+const apiUrl = (path: string) => `${import.meta.env.BASE_URL}api/dashboard/${path}`;
 
 const DATE_RANGE_OPTIONS = [
   'Today',
@@ -474,13 +388,71 @@ const kFormat = (value: number) => (value >= 1000 ? `${(value / 1000).toFixed(1)
 
 const CustomerDashboard = () => {
   const { toast } = useToast();
-  const [customerId, setCustomerId] = useState('abc');
+  const [customerId, setCustomerId] = useState<string | null>(null);
   const [projectName, setProjectName] = useState('All Projects');
   const [dateRange, setDateRange] = useState('Last 30 Days');
   const [selectedRange, setSelectedRange] = useState<DateRange | undefined>();
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [customerList, setCustomerList] = useState<CustomerOption[]>([]);
+  const [customerData, setCustomerData] = useState<MockCustomer | null>(null);
+  const [loadError, setLoadError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
-  const customer = MOCK_CUSTOMERS.find((c) => c.id === customerId) ?? MOCK_CUSTOMERS[0];
+  useEffect(() => {
+    let cancelled = false;
+    setLoadError(false);
+    (async () => {
+      try {
+        const res = await fetch(apiUrl('customers'));
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const list: CustomerOption[] = await res.json();
+        if (cancelled) return;
+        setCustomerList(list);
+        setCustomerId((prev) => prev ?? list[0]?.id ?? null);
+      } catch {
+        if (!cancelled) {
+          setLoadError(true);
+          toast({
+            title: 'Failed to load customers',
+            description: 'Could not reach the read-only dashboard data service.',
+            variant: 'destructive',
+          });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [toast, reloadKey]);
+
+  useEffect(() => {
+    if (!customerId) return undefined;
+    let cancelled = false;
+    setCustomerData(null);
+    (async () => {
+      try {
+        const res = await fetch(apiUrl(`customers/${customerId}`));
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data: MockCustomer = await res.json();
+        if (cancelled) return;
+        setCustomerData(data);
+      } catch {
+        if (!cancelled) {
+          setLoadError(true);
+          toast({
+            title: 'Failed to load dashboard data',
+            description: 'Could not reach the read-only dashboard data service.',
+            variant: 'destructive',
+          });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [customerId, toast, reloadKey]);
+
+  const customer = customerData ?? EMPTY_CUSTOMER;
   const selectedProject = projectName === 'All Projects' ? null : (customer.projects.find((p) => p.name === projectName) ?? null);
 
   const summary = useMemo(() => buildSummary(customer, selectedProject), [customer, selectedProject]);
@@ -530,6 +502,29 @@ const CustomerDashboard = () => {
 
   const defectTotal = summary.defect.open + summary.defect.fixed + summary.defect.closed;
 
+  if (loadError) {
+    return (
+      <div className="h-full flex flex-col items-center justify-center bg-gray-50 gap-4 px-4 text-center">
+        <AlertTriangle className="w-10 h-10 text-destructive" />
+        <div>
+          <p className="text-sm font-medium text-foreground">Failed to load dashboard data</p>
+          <p className="text-xs text-muted-foreground mt-1">The read-only QA data service is unavailable.</p>
+        </div>
+        <Button variant="outline" onClick={() => setReloadKey((k) => k + 1)}>
+          Retry
+        </Button>
+      </div>
+    );
+  }
+
+  if (!customerData) {
+    return (
+      <div className="h-full flex items-center justify-center bg-gray-50">
+        <LoadingSpinner text="Loading dashboard data..." />
+      </div>
+    );
+  }
+
   return (
     <div className="h-full overflow-auto bg-gray-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
@@ -552,7 +547,7 @@ const CustomerDashboard = () => {
               </div>
             </div>
             <Badge variant="outline" className="bg-primary/5 text-primary border-primary/20 px-3 py-1.5">
-              Presentation Prototype · Mock Data
+              Presentation Prototype · QA Data (read-only)
             </Badge>
           </div>
 
@@ -563,12 +558,12 @@ const CustomerDashboard = () => {
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 flex-1">
                   <div className="space-y-1.5">
                     <label className="text-xs font-medium text-muted-foreground">Customer</label>
-                    <Select value={customerId} onValueChange={handleCustomerChange}>
+                    <Select value={customerId ?? undefined} onValueChange={handleCustomerChange}>
                       <SelectTrigger className="w-full">
                         <SelectValue placeholder="Select customer" />
                       </SelectTrigger>
                       <SelectContent>
-                        {MOCK_CUSTOMERS.map((c) => (
+                        {customerList.map((c) => (
                           <SelectItem key={c.id} value={c.id}>
                             {c.name}
                           </SelectItem>
@@ -1070,11 +1065,11 @@ const CustomerDashboard = () => {
 
         <footer className="flex items-center justify-between pb-2">
           <p className="text-xs text-muted-foreground">
-            UI prototype · Customer-level dashboard for Super Admin · Data is mock/static only
+            UI prototype · Customer-level dashboard for Super Admin · Read-only QA data
           </p>
           <div className="flex items-center gap-1.5">
-            <XCircle className="w-3.5 h-3.5 text-muted-foreground" />
-            <span className="text-xs text-muted-foreground">No live data</span>
+            <ShieldCheck className="w-3.5 h-3.5 text-muted-foreground" />
+            <span className="text-xs text-muted-foreground">Read-only source</span>
           </div>
         </footer>
       </div>
